@@ -1,5 +1,5 @@
 // doctor.controller.ts
-import { Controller, Get, Post, Body, Param, Delete, Put, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Delete, Put, UseGuards, Req, Query } from '@nestjs/common';
 import { DoctorService } from './doctor.service';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 // import { UpdateDoctorDto } from './dto/update-doctor.dto';
@@ -8,6 +8,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/role.guard';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
+import { PaginationSortDto } from '../PaginationSort.dto ';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('/api/v1/doctor')
@@ -34,8 +35,8 @@ export class DoctorController {
   }
 
   @Get('get')
-  findAll() {
-    return this.doctorService.findAll();
+  getAllDoctors(@Query() paginationSortDto: PaginationSortDto) {
+    return this.doctorService.getAllDoctors({}, paginationSortDto);
   }
 
   @Get('get/:id')

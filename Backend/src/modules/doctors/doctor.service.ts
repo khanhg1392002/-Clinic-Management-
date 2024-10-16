@@ -7,14 +7,14 @@ import { UserService } from '../users/user.service';
 import { Department, DepartmentDocument } from '../departments/schema/department.schema';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { UpdateUserDto } from '../users/dto/update-user.dto';
+import { PaginationSortDto } from '../PaginationSort.dto ';
 
 @Injectable()
 export class DoctorService {
   constructor(
     @InjectModel(Doctor.name) private doctorModel: Model<DoctorDocument>,
     @InjectModel(Department.name) private departmentModel: Model<DepartmentDocument>,
-    @Inject(forwardRef(() => UserService))
-    private userService: UserService,
+    @Inject(forwardRef(() => UserService)) private userService: UserService,
   ) { }
 
   async create(createDoctorDto: CreateDoctorDto, createdBy: string): Promise<Doctor> {
@@ -187,13 +187,66 @@ export class DoctorService {
   }
 
 
-  async findAll(): Promise<Doctor[]> {
-    return this.doctorModel.find().exec();
+  async findOne(id: string): Promise<Doctor> {
+    const doctor = await this.doctorModel.findById(id)
+      .populate({
+        path: 'user',
+        select: '-password -deletedAt -deletedBy -avatarUrl'
+      })
+      .populate('department', 'name')
+      .exec();
+
+    if (!doctor) {
+      throw new HttpException('Không tìm thấy bác sĩ', HttpStatus.NOT_FOUND);
+    }
+
+    return doctor;
   }
 
-  async findOne(id: string): Promise<Doctor> {
-    return this.doctorModel.findById(id).exec();
+  async getAllDoctors(query: any = {}, paginationSortDto: PaginationSortDto): Promise<{ doctors: Doctor[], total: number, page: number, limit: number }> {
+    const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc', search } = paginationSortDto;
+    const skip = (page - 1) * limit;
+  
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      
+      // Tìm kiếm departments trước
+      const departments = await this.departmentModel.find({ title: searchRegex }).select('_id');
+      const departmentIds = departments.map(dept => dept._id);
+  
+      // Lấy tất cả các trường trong Doctor model
+      const doctorFields = Object.keys(this.doctorModel.schema.paths).filter(
+        field => field !== 'user' && field !== 'department' && field !== 'patients'
+      );
+  
+      query.$or = [
+        ...doctorFields.map(field => ({ [field]: searchRegex })),
+        { department: { $in: departmentIds } },
+        { 'user.firstName': searchRegex },
+        { 'user.lastName': searchRegex },
+        { 'user.email': searchRegex },
+        { 'user.phone': searchRegex }
+      ];
+    }
+  
+    const [doctors, total] = await Promise.all([
+      this.doctorModel.find(query)
+        .populate('user', '-password -deletedAt -deletedBy -avatarUrl')
+        .populate('department', 'title')
+        .sort({ [sortBy]: sortOrder })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.doctorModel.countDocuments(query)
+    ]);
+  
+    if (!doctors.length) {
+      throw new HttpException('Không tìm thấy bác sĩ', HttpStatus.NOT_FOUND);
+    }
+  
+    return { doctors, total, page: Number(page), limit: Number(limit) };
   }
+
 
 
 }
