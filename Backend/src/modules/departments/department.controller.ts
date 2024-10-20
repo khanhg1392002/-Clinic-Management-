@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Status, UserRole } from 'src/config/constants';
 import { RolesGuard } from '../auth/guards/role.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { PaginationSortDto } from '../PaginationSort.dto ';
 
 
 @Controller('/api/v1/department')
@@ -21,8 +22,8 @@ export class DepartmentController {
   }
 
   @Get('get')
-  findAll(@Query('status') status: Status) {
-    return this.departmentService.findAll(status);
+  async getAllUsers(@Query() paginationSortDto: PaginationSortDto) {
+    return this.departmentService.getAllDepartments({}, paginationSortDto);
   }
 
   @Get('get/:id')

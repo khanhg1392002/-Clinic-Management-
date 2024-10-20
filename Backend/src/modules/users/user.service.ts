@@ -20,18 +20,32 @@ export class UserService {
     // private fileUploadService: FileUploadService
   ) { }
 
-
   async getOne(email: string): Promise<User> {
-    return await this.userModel.findOne({ email }).exec();
-  }
-
-  async getById(id: string): Promise<User> {
-    const user = await this.userModel.findById(id).exec();
+    const user = await this.userModel.findOne({ 
+      email, 
+      status: Status.ACTIVE 
+    })
+    .exec();
     if (!user) {
       throw new HttpException(ErrorService.USER_NOT_FOUND.message, HttpStatus.NOT_FOUND);
     }
     return user;
   }
+
+  async getById(id: string): Promise<User> {
+    const user = await this.userModel.findOne({ 
+      _id: id, 
+      status: Status.ACTIVE 
+    })
+    .select('-password') // Loại bỏ trường password
+    .exec();
+    if (!user) {
+      throw new HttpException(ErrorService.USER_NOT_FOUND.message, HttpStatus.NOT_FOUND);
+    }
+    return user;
+  }
+  
+  
 
   // async findAllUsers(query: any = {}, options: any = {}): Promise<User[]> {
   //   const excludedFields = ['-password', '-deletedAt', '-deletedBy', '-avatarUrl'];
@@ -78,7 +92,7 @@ export class UserService {
       password: hash,
       status: Status.ACTIVE,
       avatarUrl,
-      createdBy,
+      createdBy: new Types.ObjectId(createdBy),
     });
 
     const savedUser = await newUser.save();
@@ -163,7 +177,9 @@ export class UserService {
 
     const updatedUser = await this.userModel.findByIdAndUpdate(
       id,
-      { $set: { ...updateUserDto, updatedBy } }, // Cập nhật thông tin và ghi lại người cập nhật
+      { $set: { ...updateUserDto, 
+        updatedBy:new Types.ObjectId(updatedBy)
+      } }, 
       { new: true, runValidators: true }
     ).exec();
 
@@ -196,9 +212,10 @@ export class UserService {
     const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc', search } = paginationSortDto;
     const skip = (page - 1) * limit;
 
-    const excludedFields = ['-password', '-deletedAt', '-deletedBy', '-avatarUrl'];
-
     const sortOptions = { [sortBy]: sortOrder };
+
+    // Thêm điều kiện tìm kiếm chỉ user Active
+    query.status = Status.ACTIVE;
 
     // Tạo điều kiện tìm kiếm trên các trường phù hợp
     if (search) {
@@ -215,13 +232,15 @@ export class UserService {
     }
 
     const [users, total] = await Promise.all([
-      this.userModel.find(query, excludedFields.join(' '))
+      this.userModel.find(query)
+        .select('firstName lastName email phoneNumber role status') // Các trường cần lấy
         .sort(sortOptions)
         .skip(skip)
         .limit(limit)
         .exec(),
       this.userModel.countDocuments(query)
     ]);
+
 
     if (!users || users.length === 0) {
       throw new HttpException('Không tìm thấy người dùng', HttpStatus.NOT_FOUND);
@@ -234,6 +253,8 @@ export class UserService {
       limit: Number(limit)
     };
   }
+
+
 
 }
 

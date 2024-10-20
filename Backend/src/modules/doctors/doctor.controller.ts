@@ -35,8 +35,8 @@ export class DoctorController {
   }
 
   @Get('get')
-  getAllDoctors(@Query() paginationSortDto: PaginationSortDto) {
-    return this.doctorService.getAllDoctors({}, paginationSortDto);
+  async getAllDoctors(@Query() paginationSortDto: PaginationSortDto) {
+    return this.doctorService.getAllDoctors(paginationSortDto);
   }
 
   @Get('get/:id')

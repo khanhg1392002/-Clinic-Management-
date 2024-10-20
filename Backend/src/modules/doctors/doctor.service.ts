@@ -1,6 +1,6 @@
 import { BadRequestException, forwardRef, HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model, Schema, Types } from 'mongoose';
 import { Doctor, DoctorDocument } from './schema/doctor.schema';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 import { UserService } from '../users/user.service';
@@ -8,6 +8,8 @@ import { Department, DepartmentDocument } from '../departments/schema/department
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { UpdateUserDto } from '../users/dto/update-user.dto';
 import { PaginationSortDto } from '../PaginationSort.dto ';
+import { User } from '../users/schema/user.schema';
+import { Status } from 'src/config/constants';
 
 @Injectable()
 export class DoctorService {
@@ -15,6 +17,7 @@ export class DoctorService {
     @InjectModel(Doctor.name) private doctorModel: Model<DoctorDocument>,
     @InjectModel(Department.name) private departmentModel: Model<DepartmentDocument>,
     @Inject(forwardRef(() => UserService)) private userService: UserService,
+    @InjectModel(User.name) private readonly userModel: Model<User>
   ) { }
 
   async create(createDoctorDto: CreateDoctorDto, createdBy: string): Promise<Doctor> {
@@ -49,7 +52,10 @@ export class DoctorService {
         path: 'user',
         select: '-password', // Loại bỏ trường password
       })
-      .populate('department')
+      .populate({
+        path: 'department',
+        select: 'title, description',
+      })
       .populate('patients')
       .exec();
 
@@ -129,7 +135,6 @@ export class DoctorService {
         select: '-password', // Loại bỏ trường password
       })
       .populate('department')
-      .populate('updatedBy')
       .populate('patients')
       .exec();
 
@@ -153,22 +158,20 @@ export class DoctorService {
 
         userIds.push(doctor.user.toString());
 
-        // // Xóa doctor khỏi department
-        // if (doctor.department) {
-        //   await this.departmentModel.findByIdAndUpdate(
-        //     doctor.department,
-        //     { $pull: { doctors: doctor._id } }
-        //   );
-        // }
+        // Xóa doctor khỏi department
+        if (doctor.department) {
+          await this.departmentModel.findByIdAndUpdate(
+            doctor.department,
+            { $pull: { doctors: doctor._id } }
+          );
+        }
 
         // // Xóa các liên kết với bệnh nhân
-        // await this.patientModel.updateMany(
+        // await this.patientModel.upda teMany(
         //   { doctor: doctor._id },
         //   { $unset: { doctor: 1 } }
         // );
 
-        // Xóa doctor
-        // await this.doctorModel.findByIdAndRemove(id).exec();
 
         successMessages.push(`Doctor with ID ${id} removed successfully`);
       } catch (error) {
@@ -178,7 +181,7 @@ export class DoctorService {
 
     // Sử dụng batchMoveToTrash của userService
     if (userIds.length > 0) {
-      const userResult = await this.userService.batchMoveToTrash(userIds, deletedBy);
+      const userResult = await this.userService.batchMoveToTrash(userIds,  deletedBy);
       successMessages.push(...userResult.successMessages);
       errorMessages.push(...userResult.errorMessages);
     }
@@ -203,50 +206,76 @@ export class DoctorService {
     return doctor;
   }
 
-  async getAllDoctors(query: any = {}, paginationSortDto: PaginationSortDto): Promise<{ doctors: Doctor[], total: number, page: number, limit: number }> {
+  async getAllDoctors(paginationSortDto: PaginationSortDto): Promise<{ doctors: Doctor[], total: number, page: number, limit: number }> {
     const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc', search } = paginationSortDto;
     const skip = (page - 1) * limit;
   
+    const query: any = {};
+    const sortOptions: any = {};
+  
     if (search) {
       const searchRegex = new RegExp(search, 'i');
-      
-      // Tìm kiếm departments trước
-      const departments = await this.departmentModel.find({ title: searchRegex }).select('_id');
-      const departmentIds = departments.map(dept => dept._id);
+      const searchNumber = parseFloat(search);
   
-      // Lấy tất cả các trường trong Doctor model
-      const doctorFields = Object.keys(this.doctorModel.schema.paths).filter(
-        field => field !== 'user' && field !== 'department' && field !== 'patients'
-      );
+      const [departments, users] = await Promise.all([
+        this.departmentModel.find({ $or: [{ title: searchRegex }, { description: searchRegex }] }).select('_id'),
+        this.userModel.find({
+          $or: [
+            { firstName: searchRegex },
+            { lastName: searchRegex },
+            { email: searchRegex },
+            { phoneNumber: searchRegex }
+          ]
+        }).select('_id')
+      ]);
   
       query.$or = [
-        ...doctorFields.map(field => ({ [field]: searchRegex })),
-        { department: { $in: departmentIds } },
-        { 'user.firstName': searchRegex },
-        { 'user.lastName': searchRegex },
-        { 'user.email': searchRegex },
-        { 'user.phone': searchRegex }
+        { specialization: searchRegex },
+        { bio: searchRegex },
+        { department: { $in: departments.map(dept => dept._id) } },
+        { user: { $in: users.map(user => user._id) } }
       ];
+  
+      if (!isNaN(searchNumber)) {
+        query.$or.push({ experience: searchNumber }, { education: searchNumber });
+      }
+    }
+  
+    if (sortBy === 'firstName' || sortBy === 'lastName') {
+      sortOptions[`user.${sortBy}`] = sortOrder;
+    } else if (sortBy === 'department') {
+      sortOptions['department.title'] = sortOrder;
+    } else {
+      sortOptions[sortBy] = sortOrder;
     }
   
     const [doctors, total] = await Promise.all([
       this.doctorModel.find(query)
-        .populate('user', '-password -deletedAt -deletedBy -avatarUrl')
+        .select('specialization experience')
+        .populate({
+          path: 'user',
+          select: 'lastName firstName phoneNumber status email',
+          match: { status: Status.ACTIVE }
+        })
         .populate('department', 'title')
-        .sort({ [sortBy]: sortOrder })
+        .sort(sortOptions)
         .skip(skip)
         .limit(limit)
         .lean(),
-      this.doctorModel.countDocuments(query)
-    ]);
+        this.doctorModel.countDocuments({
+          ...query,
+          user: { $in: (await this.userModel.find({ status: Status.ACTIVE }).select('_id')).map(u => u._id) }
+        })
+      ]);
   
-    if (!doctors.length) {
+    const activeDoctors = doctors.filter(doctor => doctor.user); // Lọc bỏ các bác sĩ có user bị null (do không thỏa mãn điều kiện status)
+  
+    if (!activeDoctors.length) {
       throw new HttpException('Không tìm thấy bác sĩ', HttpStatus.NOT_FOUND);
     }
   
-    return { doctors, total, page: Number(page), limit: Number(limit) };
+    return { doctors: activeDoctors, total, page: Number(page), limit: Number(limit) };
   }
-
-
+  
 
 }
