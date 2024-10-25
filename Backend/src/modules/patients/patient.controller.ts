@@ -15,36 +15,40 @@ export class PatientController {
   constructor(private readonly patientService: PatientService) {}
 
   @Post('add')
-  create(@Body() createPatientDto: CreatePatientDto, @Req() req) {
+  async createPatient(@Body() createPatientDto: CreatePatientDto, @Req() req) {
     const createdBy = req.user.userId
     return this.patientService.create(createPatientDto, createdBy);
   }
 
   @Get('get')
-  async getAllDoctors(@Query() paginationSortDto: PaginationSortDto) {
+  async getAllPatients(@Query() paginationSortDto: PaginationSortDto) {
     return this.patientService.getAllPatients({}, paginationSortDto);
   }
   
+  @Get('phone/:phoneNumber')
+  async findByPhone(@Param('phoneNumber') phoneNumber: string) {
+    return this.patientService.findByPhone(phoneNumber);
+  }
 
   @Get('get/:id')
-  findOne(@Param('id') id: string) {
+  async findOne(@Param('id') id: string) {
     return this.patientService.findOne(id);
   }
 
   @Put('update/:id')
-  update(@Param('id') id: string, @Body() updatePatientDto: UpdatePatientDto, @Req() req) {
+  async updatePatient(@Param('id') id: string, @Body() updatePatientDto: UpdatePatientDto, @Req() req) {
     const updatedBy = req.user.userId
     return this.patientService.update(id, updatePatientDto, updatedBy);
   }
 
   @Delete('delete/:id')
-  removeSingle(@Param('id') id: string, @Req() req) {
+  deletePatient(@Param('id') id: string, @Req() req) {
     const deletedBy = req.user.userId;
     return this.patientService.remove(id, deletedBy);
   }
 
   @Delete('batch-delete')
-  removeBatch(@Body('ids') ids: string[], @Req() req) {
+  batchDeletePatients(@Body('ids') ids: string[], @Req() req) {
     const deletedBy = req.user.userId;
     return this.patientService.remove(ids, deletedBy);
   }

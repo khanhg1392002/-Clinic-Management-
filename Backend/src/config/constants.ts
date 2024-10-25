@@ -3,6 +3,8 @@
  * @module constants/biz
  */
 
+import { execPath } from "process";
+
 // User
 export enum Gender {
   FEMALE = 0,
@@ -35,11 +37,35 @@ export enum AcademicDegree {
   PROFESSOR = 3, // Giáo sư
 }
 
-//
+export enum TimeSlot {
+  SLOT_8_9 = 8,
+  SLOT_9_10 = 9,
+  SLOT_10_11 = 10,
+  SLOT_11_12 = 11,
+  SLOT_13_14 = 13,
+  SLOT_14_15 = 14,
+  SLOT_15_16 = 15,
+  SLOT_16_17 = 16,
+}
+
+// Patient
 export enum BenifitCode {
   DISCOUNT80 = 0,
   DISCOUNT95 = 1,
   DISCOUNT100 = 2,
+}
+
+// Appointment
+export enum appointmentStatus {
+  PENDING = 'PENDING',
+  CONFIRMED = 'CONFIRMED',
+  CANCELLED = 'CANCELLED',
+  COMPLETED = 'COMPLETED',
+}
+
+export enum bookingType {
+  ONLINE = "ONLINE",
+  OFFLINE = "OFFLINE"
 }
 
 // config/constants.ts

@@ -1,7 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
-import { User } from '../../users/schema/user.schema';
-import { Department } from '../../departments/schema/department.schema';
 import { AcademicDegree } from 'src/config/constants';
 
 export type DoctorDocument = Doctor & Document;

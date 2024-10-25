@@ -16,13 +16,13 @@ export class DepartmentController {
   constructor(private readonly departmentService: DepartmentService) {}
 
   @Post('add')
-  async create(@Body() createDepartmentDto: CreateDepartmentDto, @Req() req) {
+  async createDepartment(@Body() createDepartmentDto: CreateDepartmentDto, @Req() req) {
     const createdBy = req.user.userId;
     return this.departmentService.create(createDepartmentDto, createdBy);
   }
 
   @Get('get')
-  async getAllUsers(@Query() paginationSortDto: PaginationSortDto) {
+  async getAllDepartment(@Query() paginationSortDto: PaginationSortDto) {
     return this.departmentService.getAllDepartments({}, paginationSortDto);
   }
 
@@ -32,13 +32,13 @@ export class DepartmentController {
   }
 
   @Put('update/:id')
-  async update(@Param('id') id: string, @Body() updateDepartmentDto: UpdateDepartmentDto, @Req() req) {
+  async updateDepartment(@Param('id') id: string, @Body() updateDepartmentDto: UpdateDepartmentDto, @Req() req) {
     const updatedBy = req.user.userId;
     return this.departmentService.update(id, updateDepartmentDto, updatedBy);
   }
 
   @Delete('delete/:id')
-  remove(@Param('id') id: string, @Body()updateDepartmentDto: UpdateDepartmentDto, @Req() req) {
+  deleteDepartment(@Param('id') id: string, @Body()updateDepartmentDto: UpdateDepartmentDto, @Req() req) {
     const deletedBy = req.user.userId;
     return this.departmentService.remove(id, updateDepartmentDto, deletedBy);
   }

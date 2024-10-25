@@ -22,10 +22,10 @@ export class UserController {
         const createdBy = req.user.userId;
         return this.userService.create(createUserDto, createdBy);
     }
-    
+
     @Get('get')
     async getAllUsers(@Query() paginationSortDto: PaginationSortDto) {
-      return this.userService.findAllUsers({}, paginationSortDto);
+        return this.userService.findAllUsers({}, paginationSortDto);
     }
 
     @Get('get/:id')

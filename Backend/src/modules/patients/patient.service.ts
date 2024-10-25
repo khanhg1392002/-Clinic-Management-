@@ -1,43 +1,43 @@
-import { forwardRef, HttpException, HttpStatus, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, HttpException, HttpStatus, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { Patient, PatientDocument } from './schema/patient.schema';
-import { User } from '../users/schema/user.schema';
-import { UserService } from '../users/user.service';
-import { UpdateUserDto } from '../users/dto/update-user.dto';
-import { Status } from 'src/config/constants';
-import { Doctor } from '../doctors/schema/doctor.schema';
 import { PaginationSortDto } from '../PaginationSort.dto ';
+import { Status } from 'src/config/constants';
+import { nowTime } from 'src/utils/timeUtil';
+import ErrorService from 'src/config/errors';
 
 @Injectable()
 export class PatientService {
     constructor(
         @InjectModel(Patient.name) private patientModel: Model<PatientDocument>,
-        @Inject(forwardRef(() => UserService)) private userService: UserService,
-        @InjectModel(User.name) private readonly userModel: Model<User>,
     ) { }
 
     async create(createPatientDto: CreatePatientDto, createdBy: string): Promise<Patient> {
-        const { user, ...patientData } = createPatientDto;
+        const { phoneNumber, nationalId } = createPatientDto;
 
-        const createdUser = await this.userService.create(user, createdBy);
+        // Check if phoneNumber is unique
+        const existingPhoneNumber = await this.patientModel.findOne({ phoneNumber, status: Status.ACTIVE });
+        if (existingPhoneNumber) {
+            throw new ConflictException('Phone number already exists');
+        }
+
+        // Kiểm tra duy nhất cho nationalId nếu người dùng đã nhập
+        if (nationalId) {
+            const existingNationalId = await this.patientModel.findOne({ nationalId, status: Status.ACTIVE });
+            if (existingNationalId) {
+                throw new ConflictException('National ID already exists');
+            }
+        }
 
         const newPatient = new this.patientModel({
-            ...patientData,
-            user: (createdUser as any)._id,
+            ...createPatientDto,
+            createdBy,
+            status: Status.ACTIVE
         });
-        const savedPatient = await newPatient.save();
-
-        const populatedPatient = await this.patientModel.findById(savedPatient._id)
-            .populate({
-                path: 'user',
-                select: '-password', // Loại bỏ trường password
-            })
-            .exec();
-
-        return populatedPatient;
+        return await newPatient.save();
     }
 
     async getAllPatients(
@@ -49,7 +49,10 @@ export class PatientService {
 
         const searchQuery = search ? {
             $or: [
-                ...['email', 'firstName', 'lastName', 'phoneNumber', 'address', 'nationalId'].map(field => ({ [`user.${field}`]: new RegExp(search, 'i') })),
+                { firstName: new RegExp(search, 'i') },
+                { lastName: new RegExp(search, 'i') },
+                { phoneNumber: new RegExp(search, 'i') },
+                { email: new RegExp(search, 'i') },
                 { insuranceNumber: new RegExp(search, 'i') },
                 { emergencyContactName: new RegExp(search, 'i') },
                 { emergencyContactPhone: new RegExp(search, 'i') },
@@ -60,43 +63,27 @@ export class PatientService {
         const finalQuery = {
             ...query,
             ...searchQuery,
-
+            status: Status.ACTIVE
         };
 
         const [patients, total] = await Promise.all([
             this.patientModel.find(finalQuery)
-                .populate({
-                    path: 'user',
-                    select: 'lastName firstName phoneNumber status email',
-                    match: { status: Status.ACTIVE }
-                })
                 .sort({ [sortBy]: sortOrder })
                 .skip(skip)
                 .limit(limit)
                 .lean(),
-            this.patientModel.countDocuments({
-                ...finalQuery,
-                user: { $in: (await this.userModel.find({ status: Status.ACTIVE }).select('_id')).map(u => u._id) }
-            })
+            this.patientModel.countDocuments(finalQuery)
         ]);
 
-        const activePatients = patients.filter(patient => patient.user);
-
         if (patients.length === 0) {
-            throw new HttpException('Không tìm thấy bệnh nhân có user hợp lệ', HttpStatus.NOT_FOUND);
+            throw new HttpException('Không tìm thấy bệnh nhân', HttpStatus.NOT_FOUND);
         }
 
-        return { patients: activePatients, total, page: Number(page), limit: Number(limit) };
+        return { patients, total, page: Number(page), limit: Number(limit) };
     }
 
-
     async findOne(id: string): Promise<Patient> {
-        const patient = await this.patientModel.findOne({ id, status: Status.ACTIVE })
-            .populate({
-                path: 'user',
-                select: '-password', // Loại bỏ trường password
-            })
-            .exec();
+        const patient = await this.patientModel.findOne({ _id: id, status: Status.ACTIVE }).exec();
 
         if (!patient) {
             throw new NotFoundException(`Patient with ID ${id} not found`);
@@ -105,76 +92,84 @@ export class PatientService {
     }
 
     async update(id: string, updatePatientDto: UpdatePatientDto, updatedBy: string): Promise<Patient> {
-        // Kiểm tra nếu không có trường nào trong updatePatientDto
         if (!updatePatientDto || Object.keys(updatePatientDto).length === 0) {
             throw new HttpException('No data fields provided for update', HttpStatus.BAD_REQUEST);
         }
 
-        const existingPatient = await this.patientModel.findById(id).exec();
-        if (!existingPatient) {
-            throw new HttpException('Patient not found', HttpStatus.NOT_FOUND);
+        const existingEmail = await this.patientModel.findOne({ email: updatePatientDto.email }).exec();
+        if (existingEmail) {
+            throw new HttpException(ErrorService.USER_ERR_EMAIL_EXISTED.message, HttpStatus.BAD_REQUEST);
         }
 
-        const { user, ...patientData } = updatePatientDto;
-
-        // Luôn cập nhật thời gian updatedAt cho user, kể cả khi không có thay đổi dữ liệu của user
-        const userToUpdate = updatePatientDto.user || existingPatient.user; // Nếu không có `user` trong DTO, lấy từ patient hiện tại
-        try {
-            const updateUserDto = {
-                ...userToUpdate,
-                updatedAt: new Date(), // Luôn cập nhật thời gian updatedAt
-            };
-
-            await this.userService.update(existingPatient.user.toString(), updateUserDto as UpdateUserDto, updatedBy);
-        } catch (error) {
-            if (error instanceof HttpException) {
-                throw error;
-            }
-            throw new HttpException('Failed to update user information', HttpStatus.INTERNAL_SERVER_ERROR);
+        const existingPhone = await this.patientModel.findOne({ phoneNumber: updatePatientDto.phoneNumber }).exec();
+        if (existingPhone) {
+            throw new HttpException(ErrorService.PHONE_IS_EXISTED.message, HttpStatus.BAD_REQUEST);
         }
 
-        // Cập nhật thông tin patient
-        const updatedPatient = await this.patientModel.findByIdAndUpdate(
-            id,
+        const existingNationalId = await this.patientModel.findOne({ nationalId: updatePatientDto.nationalId }).exec();
+        if (existingNationalId) {
+            throw new HttpException(ErrorService.USER_ERR_EMAIL_EXISTED.message, HttpStatus.BAD_REQUEST);
+        }
+
+        const updatedPatient = await this.patientModel.findOneAndUpdate(
+            { _id: id, status: Status.ACTIVE },
             {
                 $set: {
-                    ...patientData
+                    ...updatePatientDto,
+                    updatedBy: new Types.ObjectId(updatedBy)
                 }
             },
             { new: true, runValidators: true }
         ).exec();
 
         if (!updatedPatient) {
-            throw new HttpException('Failed to update patient', HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new HttpException('Patient not found or update failed', HttpStatus.NOT_FOUND);
         }
 
-        // Populate all related fields
-        const populatedPatient = await this.patientModel.findById(updatedPatient._id)
-            .populate({
-                path: 'user',
-                select: '-password', // Loại bỏ trường password
-            })
-            .exec();
-
-        return populatedPatient;
-
+        return updatedPatient;
     }
 
     async remove(ids: string | string[], deletedBy: string): Promise<{ successMessages: string[], errorMessages: string[] }> {
-        // Chuyển đổi id thành mảng nếu nó là string
         const idArray = Array.isArray(ids) ? ids : [ids];
+        const successMessages: string[] = [];
+        const errorMessages: string[] = [];
 
-        // Tìm kiếm và populate user cho từng patient
-        const patients = await this.patientModel.find({ _id: { $in: idArray } })
-            .populate('user') // Giả sử trường người dùng trong patient là 'user'
-            .exec();
+        for (const id of idArray) {
+            try {
+                const result = await this.patientModel.findOneAndUpdate(
+                    { _id: id, status: Status.ACTIVE },
+                    {
+                        status: Status.SUSPENDED,
+                        deletedBy: new Types.ObjectId(deletedBy),
+                        deletedAt: nowTime
+                    },
+                    { new: true }
+                ).exec();
 
-        // Lấy id của user từ từng patient và chuyển đổi thành string
-        const userIds = patients.map(patient => patient.user?._id.toString()).filter(Boolean); // Chuyển đổi ObjectId thành string và lọc bỏ giá trị undefined
+                if (result) {
+                    successMessages.push(`Successfully deleted patient with ID: ${id}`);
+                } else {
+                    errorMessages.push(`Patient with ID ${id} not found or already deleted`);
+                }
+            } catch (error) {
+                errorMessages.push(`Error deleting patient with ID ${id}: ${error.message}`);
+            }
+        }
 
-        // Gọi hàm batchMoveToTrash từ userService
-        return this.userService.batchMoveToTrash(userIds, deletedBy);
+        return { successMessages, errorMessages };
     }
 
+    // async findByPhone(phoneNumber: string): Promise<Patient> {
+    //     const patient = await this.patientModel.findOne({ phoneNumber, status: Status.ACTIVE }).exec();
+    //     if (!patient) {
+    //         throw new NotFoundException('User with this phone number not found');
+    //     }
+    //     return patient;
+    // }
 
+    async findByPhone(phoneNumber: string): Promise<Patient | null> {
+        const patient = await this.patientModel.findOne({ phoneNumber, status: Status.ACTIVE }).exec();
+        return patient; // Trả về null nếu không tìm thấy thay vì throw exception
+    }
+    
 }

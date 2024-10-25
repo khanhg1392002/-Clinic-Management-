@@ -1,4 +1,4 @@
-import { BadRequestException, forwardRef, HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, forwardRef, HttpException, HttpStatus, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Schema, Types } from 'mongoose';
 import { Doctor, DoctorDocument } from './schema/doctor.schema';
@@ -10,11 +10,15 @@ import { UpdateUserDto } from '../users/dto/update-user.dto';
 import { PaginationSortDto } from '../PaginationSort.dto ';
 import { User } from '../users/schema/user.schema';
 import { Status } from 'src/config/constants';
+import { DoctorSchedule, DoctorScheduleDocument } from './schema/doctorSchedule.schema';
+import { CreateScheduleDto } from './dto/create-schedule.dto';
+import { UpdateScheduleDto } from './dto/update-schedule.dto';
 
 @Injectable()
 export class DoctorService {
   constructor(
     @InjectModel(Doctor.name) private doctorModel: Model<DoctorDocument>,
+    @InjectModel(DoctorSchedule.name) private doctorScheduleModel: Model<DoctorScheduleDocument>,
     @InjectModel(Department.name) private departmentModel: Model<DepartmentDocument>,
     @Inject(forwardRef(() => UserService)) private userService: UserService,
     @InjectModel(User.name) private readonly userModel: Model<User>
@@ -143,50 +147,16 @@ export class DoctorService {
 
 
   async remove(ids: string | string[], deletedBy: string): Promise<{ successMessages: string[], errorMessages: string[] }> {
-    const doctorIds = Array.isArray(ids) ? ids : [ids];
-    const successMessages: string[] = [];
-    const errorMessages: string[] = [];
-    const userIds: string[] = [];
+    const idArray = Array.isArray(ids) ? ids : [ids];
+    const doctors = await this.doctorModel.find({ _id: { $in: idArray } })
+      .populate('user') // Giả sử trường người dùng trong patient là 'user'
+      .exec();
 
-    for (const id of doctorIds) {
-      try {
-        const doctor = await this.doctorModel.findById(id).exec();
-        if (!doctor) {
-          errorMessages.push(`Doctor with ID ${id} not found`);
-          continue;
-        }
+    // Lấy id của user từ từng patient và chuyển đổi thành string
+    const userIds = doctors.map(doctor => doctor.user?._id.toString()).filter(Boolean); // Chuyển đổi ObjectId thành string và lọc bỏ giá trị undefined
 
-        userIds.push(doctor.user.toString());
-
-        // Xóa doctor khỏi department
-        if (doctor.department) {
-          await this.departmentModel.findByIdAndUpdate(
-            doctor.department,
-            { $pull: { doctors: doctor._id } }
-          );
-        }
-
-        // // Xóa các liên kết với bệnh nhân
-        // await this.patientModel.upda teMany(
-        //   { doctor: doctor._id },
-        //   { $unset: { doctor: 1 } }
-        // );
-
-
-        successMessages.push(`Doctor with ID ${id} removed successfully`);
-      } catch (error) {
-        errorMessages.push(`Error removing doctor with ID ${id}: ${error.message}`);
-      }
-    }
-
-    // Sử dụng batchMoveToTrash của userService
-    if (userIds.length > 0) {
-      const userResult = await this.userService.batchMoveToTrash(userIds,  deletedBy);
-      successMessages.push(...userResult.successMessages);
-      errorMessages.push(...userResult.errorMessages);
-    }
-
-    return { successMessages, errorMessages };
+    // Gọi hàm batchMoveToTrash từ userService
+    return this.userService.batchMoveToTrash(userIds, deletedBy);
   }
 
 
@@ -209,14 +179,14 @@ export class DoctorService {
   async getAllDoctors(paginationSortDto: PaginationSortDto): Promise<{ doctors: Doctor[], total: number, page: number, limit: number }> {
     const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc', search } = paginationSortDto;
     const skip = (page - 1) * limit;
-  
+
     const query: any = {};
     const sortOptions: any = {};
-  
+
     if (search) {
       const searchRegex = new RegExp(search, 'i');
       const searchNumber = parseFloat(search);
-  
+
       const [departments, users] = await Promise.all([
         this.departmentModel.find({ $or: [{ title: searchRegex }, { description: searchRegex }] }).select('_id'),
         this.userModel.find({
@@ -228,19 +198,19 @@ export class DoctorService {
           ]
         }).select('_id')
       ]);
-  
+
       query.$or = [
         { specialization: searchRegex },
         { bio: searchRegex },
         { department: { $in: departments.map(dept => dept._id) } },
         { user: { $in: users.map(user => user._id) } }
       ];
-  
+
       if (!isNaN(searchNumber)) {
         query.$or.push({ experience: searchNumber }, { education: searchNumber });
       }
     }
-  
+
     if (sortBy === 'firstName' || sortBy === 'lastName') {
       sortOptions[`user.${sortBy}`] = sortOrder;
     } else if (sortBy === 'department') {
@@ -248,7 +218,7 @@ export class DoctorService {
     } else {
       sortOptions[sortBy] = sortOrder;
     }
-  
+
     const [doctors, total] = await Promise.all([
       this.doctorModel.find(query)
         .select('specialization experience')
@@ -262,20 +232,131 @@ export class DoctorService {
         .skip(skip)
         .limit(limit)
         .lean(),
-        this.doctorModel.countDocuments({
-          ...query,
-          user: { $in: (await this.userModel.find({ status: Status.ACTIVE }).select('_id')).map(u => u._id) }
-        })
-      ]);
-  
+      this.doctorModel.countDocuments({
+        ...query,
+        user: { $in: (await this.userModel.find({ status: Status.ACTIVE }).select('_id')).map(u => u._id) }
+      })
+    ]);
+
     const activeDoctors = doctors.filter(doctor => doctor.user); // Lọc bỏ các bác sĩ có user bị null (do không thỏa mãn điều kiện status)
-  
+
     if (!activeDoctors.length) {
       throw new HttpException('Không tìm thấy bác sĩ', HttpStatus.NOT_FOUND);
     }
-  
+
     return { doctors: activeDoctors, total, page: Number(page), limit: Number(limit) };
   }
+
+/////////////////////////
+async createSchedule(doctorId: string, createScheduleDto: CreateScheduleDto): Promise<DoctorSchedule[]> {
+  const doctor = await this.doctorModel.findById(doctorId);
+  if (!doctor) {
+    throw new NotFoundException('Doctor not found');
+  }
+
+  const createdSchedules: DoctorSchedule[] = [];
+
+  for (const schedule of createScheduleDto.schedules) {
+    const existingSchedule = await this.doctorScheduleModel.findOne({ doctor: doctorId, date: schedule.date });
+    if (existingSchedule) {
+      throw new ConflictException(`Schedule for date ${schedule.date} already exists`);
+    }
+
+    const newSchedule = new this.doctorScheduleModel({
+      doctor: doctorId,
+      date: schedule.date, // Lưu ở UTC
+      availableTimeSlots: schedule.availableTimeSlots,
+    });
+
+    createdSchedules.push(await newSchedule.save());
+  }
+
+  return createdSchedules;
+}
+
+async getSchedule(doctorId: string, date: Date): Promise<DoctorSchedule> {
+  const schedule = await this.doctorScheduleModel.findOne({ doctor: doctorId, date });
+  if (!schedule) {
+    throw new NotFoundException('Schedule not found');
+  }
+  return schedule;
+}
+
+async getAllSchedulesForDoctor(doctorId: string): Promise<DoctorSchedule[]> {
+  const schedules = await this.doctorScheduleModel.find({ doctor: doctorId }).sort({ date: 1 });
   
+  if (schedules.length === 0) {
+    throw new NotFoundException(`No schedules found for doctor with id ${doctorId}`);
+  }
+
+  return schedules;
+}
+
+async updateSchedule(updateScheduleDto: UpdateScheduleDto): Promise<DoctorSchedule[]> {
+  const { doctorId, schedules } = updateScheduleDto;
+
+  try {
+    // Kiểm tra bác sĩ tồn tại - doctorId đã là ObjectId
+    const doctor = await this.doctorModel.findById(doctorId).exec();
+    if (!doctor) {
+      throw new NotFoundException(`Doctor with ID ${doctorId} not found`);
+    }
+
+    const updatedSchedules: DoctorSchedule[] = [];
+
+    for (const schedule of schedules) {
+      const { date, availableTimeSlots } = schedule;
+      const scheduleDate = new Date(date);
+
+      const updatedSchedule = await this.doctorScheduleModel.findOneAndUpdate(
+        {
+          doctor: doctorId, // Không cần convert vì doctorId đã là ObjectId
+          date: scheduleDate
+        },
+        {
+          $set: {
+            availableTimeSlots,
+            updatedAt: new Date()
+          }
+        },
+        { 
+          new: true,
+          upsert: true
+        }
+      ).exec();
+
+      updatedSchedules.push(updatedSchedule);
+    }
+
+    return updatedSchedules;
+
+  } catch (error) {
+    if (error) {
+      throw new BadRequestException('Invalid MongoDB operation: ' + error.message);
+    }
+    throw error;
+  }
+}
+
+async deleteSchedule(doctorId: string, date: Date): Promise<void> {
+  const result = await this.doctorScheduleModel.deleteOne({ doctor: doctorId, date });
+  if (result.deletedCount === 0) {
+    throw new NotFoundException('Schedule not found');
+  }
+}
+
+async findAvailableDoctor(departmentId: string, date: Date, timeSlot: number): Promise<Doctor> {
+  const availableDoctor = await this.doctorModel.findOne({
+    department: departmentId,
+    _id: {
+      $in: await this.doctorScheduleModel.find({
+        date,
+        availableTimeSlots: timeSlot,
+      }).distinct('doctor'),
+    },
+  });
+
+  return availableDoctor;
+}
 
 }

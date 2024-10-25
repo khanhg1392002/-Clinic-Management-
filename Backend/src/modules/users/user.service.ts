@@ -44,20 +44,6 @@ export class UserService {
     }
     return user;
   }
-  
-  
-
-  // async findAllUsers(query: any = {}, options: any = {}): Promise<User[]> {
-  //   const excludedFields = ['-password', '-deletedAt', '-deletedBy', '-avatarUrl'];
-
-  //   const users = await this.userModel.find(query, excludedFields.join(' '), options).exec();
-
-  //   if (!users || users.length === 0) {
-  //     throw new HttpException(ErrorService.USER_NOT_FOUND.message, HttpStatus.NOT_FOUND);
-  //   }
-
-  //   return users;
-  // }
 
   // Thêm users
   async create(createUserDto: CreateUserDto, createdBy: string): Promise<User> {
